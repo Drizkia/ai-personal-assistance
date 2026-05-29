@@ -10,75 +10,99 @@ const CONFIG = {
  * Webhook entry point for Fonnte
  */
 function doPost(e) {
+  let sender = ""; // Pindahkan ke luar agar bisa diakses di catch
   try {
+    if (!e || !e.postData || !e.postData.contents) return;
+    
     const contents = JSON.parse(e.postData.contents);
     
-    // Anti loop
-    if (contents.is_me || contents.isMe || contents.self || (contents.type || "") === "out") return;
+    // Log pesan masuk (cek di Executions Google Script)
+    console.log("Pesan dari " + contents.sender + ": " + contents.message);
+
+    // Anti loop SUPER KETAT
+    const isFromMe = contents.is_me || contents.isMe || contents.self || (contents.type === "out") || false;
+    if (isFromMe) {
+      console.log("Abaikan: Pesan dari bot sendiri.");
+      return;
+    }
     
-    const sender = contents.sender || (contents.data && contents.data.sender) || contents.from || "";
-    const userMessage = (contents.message || (contents.data && contents.data.message) || "").trim();
+    sender = contents.sender || (contents.data && contents.data.sender) || contents.from || "";
+    const userMessage = (contents.message || (contents.data && contents.data.message) || "");
     
     if (!userMessage || !sender) return;
 
-    // 1. Initial AI Call
-    let aiResponse = callGemini(userMessage);
+    const isOwner = (sender === CONFIG.SENDER_PRIBADI); 
     
-    // 2. Process potentially multiple rounds of function calling
-    // We allow up to 3 rounds to prevent infinite loops but handle multi-step tasks
+    // 1. Initial AI Call (Stateless - Tanpa Memory)
+    let aiResponse = callGemini(userMessage, null, null, isOwner);
+    
+    if (!aiResponse.candidates || aiResponse.candidates.length === 0) {
+      return; // Diam saja kalau gagal
+    }
+
+    // 2. Process function calling
     for (let i = 0; i < 3; i++) {
-      if (aiResponse.candidates[0].content.parts[0].functionCall) {
-        const functionCall = aiResponse.candidates[0].content.parts[0].functionCall;
+      const candidate = aiResponse.candidates[0];
+      if (candidate.content && candidate.content.parts && candidate.content.parts[0].functionCall) {
+        const functionCall = candidate.content.parts[0].functionCall;
         const result = executeTool(functionCall.name, functionCall.args);
         
-        // Feed the result back to Gemini to get a natural response
         aiResponse = callGemini(userMessage, {
           role: "function",
           name: functionCall.name,
           result: result
-        }, aiResponse.candidates[0].content.parts);
+        }, candidate.content.parts, isOwner);
+        
+        if (!aiResponse.candidates || aiResponse.candidates.length === 0) break;
       } else {
         break;
       }
     }
 
-    // 3. Final response to user
-    const finalReply = aiResponse.candidates[0].content.parts[0].text;
-    kirimWA(sender, finalReply);
+    // 3. Langsung kirim jawaban akhir
+    if (aiResponse.candidates && aiResponse.candidates[0].content && aiResponse.candidates[0].content.parts[0].text) {
+      kirimWA(sender, aiResponse.candidates[0].content.parts[0].text);
+    }
 
   } catch (err) {
-    console.error("ERROR: " + err.message + "\n" + err.stack);
-    // Silent fail or notify admin
+    console.error("ERROR: " + err.message);
+    if (sender) {
+      const errorMsg = err.message.toLowerCase();
+      if (errorMsg.includes("quota") || errorMsg.includes("limit") || errorMsg.includes("429")) {
+        kirimWA(sender, "⚠️ *Wolly Quota Limit:* Jatah harian AI kamu habis atau terlalu cepat chat-nya. \n\n*Detail:* " + err.message);
+      } else {
+        kirimWA(sender, "🔴 *Wolly Error:* " + err.message);
+      }
+    }
   }
 }
 
-/**
- * Calls Gemini API with tools and instructions
- */
-function callGemini(prompt, functionResult = null, previousParts = null) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+function callGemini(prompt, functionResult = null, previousParts = null, isOwner = true) {
+  // Balik ke gemini-2.5-flash-lite (Sudah terbukti punya jatah 20 RPM di akun kamu)
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
   
   const now = new Date();
   const timeContext = `Waktu sekarang: ${Utilities.formatDate(now, "Asia/Jakarta", "EEEE, dd MMMM yyyy HH:mm")} WIB.`;
 
-  const systemInstruction = `Kamu adalah Wolly, asisten pintar milik Dimas Rizki.
-Tugas utamamu adalah membantu Dimas mengelola jadwal di Google Calendar.
-Gunakan gaya bahasa yang ramah, santai, dan sedikit ceria (gunakan emoji).
-Selalu konfirmasi jika berhasil melakukan sesuatu.
-
-Aturan Penting:
-1. Kamu punya akses ke alat (tools) untuk mengelola kalender. Gunakan alat tersebut jika user meminta sesuatu terkait jadwal.
-2. Jika user ingin cek jadwal, gunakan 'list_events'.
-3. Jika user ingin tambah jadwal, gunakan 'add_event'. Pastikan kamu mengekstrak judul, waktu mulai, waktu selesai, lokasi, dan warna jika disebutkan.
-4. Jika user ingin hapus jadwal, gunakan 'delete_events'.
-5. Jika user ingin cari waktu kosong, gunakan 'find_free_slots'.
-6. Jika instruksi user kurang jelas (misal: "tambah rapat" tanpa jam), tanyakan detailnya.
-7. ${timeContext}`;
+  const systemInstruction = `Kamu adalah Wolly, asisten AI pribadi milik Dimas Rizki.
+  
+  TUGAS UTAMA: Mengelola Google Calendar Dimas Rizki.
+  
+  ATURAN SANGAT KETAT:
+  1. JANGAN PERNAH memberikan respon basa-basi seperti "oke", "tunggu sebentar", atau "saya cek dulu". 
+  2. Kamu harus LANGSUNG memberikan hasil akhir setelah menggunakan alat (tools).
+  3. Jika ditanya jadwal, WAJIB gunakan 'list_events' terlebih dahulu sebelum menjawab.
+  4. Gunakan format DAFTAR yang lega dan terstruktur. Gunakan garis pemisah (---) antar agenda agar tidak menumpuk.
+  
+  IDENTITAS:
+  ${isOwner ? '- Kamu bicara dengan DIMAS RIZKI. Gunakan bahasa akrab.' : '- Kamu bicara dengan TAMU. JANGAN beri detail judul agenda, cukup bilang Dimas sedang sibuk/tidak.'}
+  
+  ${timeContext}`;
 
   let contents = [];
   
   if (functionResult && previousParts) {
-    // If we are providing a function result, we need to send back the conversation history
+    // Jika ini respon dari tool, urutannya: user (pertanyaan) -> model (panggil fungsi) -> function (hasil fungsi)
     contents.push({ role: "user", parts: [{ text: prompt }] });
     contents.push({ role: "model", parts: previousParts });
     contents.push({
@@ -91,21 +115,22 @@ Aturan Penting:
       }]
     });
   } else {
+    // Jika chat baru: user (pertanyaan)
     contents.push({ role: "user", parts: [{ text: prompt }] });
   }
 
   const payload = {
     contents: contents,
-    system_instruction: { parts: [{ text: systemInstruction }] },
+    systemInstruction: { parts: [{ text: systemInstruction }] },
     tools: [{
-      function_declarations: [
+      functionDeclarations: [
         {
           name: "list_events",
           description: "Melihat daftar agenda/jadwal pada tanggal tertentu.",
           parameters: {
-            type: "object",
+            type: "OBJECT",
             properties: {
-              date: { type: "string", description: "Tanggal yang ingin dicek (format YYYY-MM-DD)." }
+              date: { type: "STRING", description: "Tanggal yang ingin dicek (format YYYY-MM-DD)." }
             },
             required: ["date"]
           }
@@ -114,13 +139,13 @@ Aturan Penting:
           name: "add_event",
           description: "Menambahkan jadwal atau agenda baru ke kalender.",
           parameters: {
-            type: "object",
+            type: "OBJECT",
             properties: {
-              title: { type: "string", description: "Judul agenda." },
-              startTime: { type: "string", description: "Waktu mulai (ISO 8601, format YYYY-MM-DDTHH:mm:ssZ)." },
-              endTime: { type: "string", description: "Waktu selesai (ISO 8601, format YYYY-MM-DDTHH:mm:ssZ)." },
-              location: { type: "string", description: "Lokasi acara (opsional)." },
-              color: { type: "string", description: "Warna label (merah, pink, kuning, hijau, tosca, biru, abu)." }
+              title: { type: "STRING", description: "Judul agenda." },
+              startTime: { type: "STRING", description: "Waktu mulai (ISO 8601, format YYYY-MM-DDTHH:mm:ssZ)." },
+              endTime: { type: "STRING", description: "Waktu selesai (ISO 8601, format YYYY-MM-DDTHH:mm:ssZ)." },
+              location: { type: "STRING", description: "Lokasi acara (opsional)." },
+              color: { type: "STRING", description: "Warna label (merah, pink, kuning, hijau, tosca, biru, abu)." }
             },
             required: ["title", "startTime", "endTime"]
           }
@@ -129,10 +154,10 @@ Aturan Penting:
           name: "delete_events",
           description: "Menghapus satu atau lebih agenda berdasarkan kata kunci judul atau waktu.",
           parameters: {
-            type: "object",
+            type: "OBJECT",
             properties: {
-              keyword: { type: "string", description: "Kata kunci nama agenda yang ingin dihapus." },
-              date: { type: "string", description: "Tanggal agenda tersebut (format YYYY-MM-DD)." }
+              keyword: { type: "STRING", description: "Kata kunci nama agenda yang ingin dihapus." },
+              date: { type: "STRING", description: "Tanggal agenda tersebut (format YYYY-MM-DD)." }
             },
             required: ["date"]
           }
@@ -141,9 +166,9 @@ Aturan Penting:
           name: "find_free_slots",
           description: "Mencari waktu kosong (lebih dari 30 menit) pada hari tertentu.",
           parameters: {
-            type: "object",
+            type: "OBJECT",
             properties: {
-              date: { type: "string", description: "Tanggal yang ingin dicek (format YYYY-MM-DD)." }
+              date: { type: "STRING", description: "Tanggal yang ingin dicek (format YYYY-MM-DD)." }
             },
             required: ["date"]
           }
@@ -155,11 +180,20 @@ Aturan Penting:
   const options = {
     method: "post",
     contentType: "application/json",
-    payload: JSON.stringify(payload)
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
   };
 
   const response = UrlFetchApp.fetch(url, options);
-  return JSON.parse(response.getContentText());
+  const resText = response.getContentText();
+  const resJson = JSON.parse(resText);
+  
+  // Jika ada error dari Google, lemparkan ke catch
+  if (resJson.error) {
+    throw new Error(resJson.error.message);
+  }
+  
+  return resJson;
 }
 
 /**
@@ -191,15 +225,19 @@ function toolListEvents(dateStr) {
   if (calendarUtama) events = events.concat(calendarUtama.getEventsForDay(date));
   if (calendarTambahan) events = events.concat(calendarTambahan.getEventsForDay(date));
   
-  events.sort((a, b) => a.getStartTime() - b.getStartTime());
+  // Deduplication based on Event ID or Title+Time
+  const uniqueEvents = Array.from(new Map(events.map(e => [e.getId(), e])).values());
   
-  if (events.length === 0) return "Tidak ada agenda untuk tanggal tersebut.";
+  uniqueEvents.sort((a, b) => a.getStartTime() - b.getStartTime());
   
-  return events.map((e, i) => {
+  if (uniqueEvents.length === 0) return "Tidak ada agenda untuk tanggal tersebut.";
+  
+  return uniqueEvents.map((e, i) => {
     const start = Utilities.formatDate(e.getStartTime(), "Asia/Jakarta", "HH:mm");
     const end = Utilities.formatDate(e.getEndTime(), "Asia/Jakarta", "HH:mm");
-    return `${i + 1}. ${e.getTitle()} (${start} - ${end}${e.getLocation() ? ' @' + e.getLocation() : ''})`;
-  }).join("\n");
+    const loc = e.getLocation() ? `\n📍 ${e.getLocation()}` : "";
+    return `--- \n⏰ *${start} - ${end}*\n📝 ${e.getTitle()}${loc}`;
+  }).join("\n\n") + "\n\n---";
 }
 
 function toolAddEvent(title, startISO, endISO, location, colorName) {

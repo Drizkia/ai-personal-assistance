@@ -4,8 +4,8 @@ function doPost(e) {
   
   try {
     // Kalender utama untuk tulis, kalender tambahan untuk baca
-    var calendarUtama = CalendarApp.getCalendarById("dimasrizkia477@gmail.com");
-    var calendarTambahan = CalendarApp.getCalendarById("apc297d6y0307@student.devacademy.id");
+    var calendarUtama = CalendarApp.getCalendarById("-");
+    var calendarTambahan = CalendarApp.getCalendarById("-");
 
     var contents = JSON.parse(e.postData.contents);
     

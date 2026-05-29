@@ -13,22 +13,16 @@ Wolly Nexus dirancang sebagai sistem asisten pribadi yang dapat memahami pesan, 
 - 👤 Mode akses Owner vs Guest (restricted data exposure)
 - 🛡️ Anti-loop protection untuk mencegah bot spam infinite
 
----
-
 ## 🧠 How It Works
 
 Wolly bekerja sebagai pipeline otomatis:
 WhatsApp Message -> Fonnete Webhook (Google Apps Script) -> LLM (Prompt + System Instruction) -> Function Calling -> Tool Execution (Google Calendar) -> LLM (Output) -> Fonnete Weebhook (Ke WhatsApp)
 
-
 Alur ini berjalan stateless (tidak menyimpan memory chat).
 
----
-
 ## 🧩 System Architecture
-[WhatsApp User] -> [Fonnete API] -> [Google Apps Script Webhook] -> [LLM] -> Function DIspatcher -> [Google Calendar API/Tools] -> [WhatsApp Reply]
 
----
+[WhatsApp User] -> [Fonnete API] -> [Google Apps Script Webhook] -> [LLM] -> Function DIspatcher -> [Google Calendar API/Tools] -> [WhatsApp Reply]
 
 ## 🛠️ Tech Stack
 
@@ -38,10 +32,7 @@ Alur ini berjalan stateless (tidak menyimpan memory chat).
 - Fonnte WhatsApp API
 - JavaScript (ES5 runtime environment)
 
----
-
 ## 🔐 Configuration
-
 Isi variabel berikut di `CONFIG`:
 
 ```js

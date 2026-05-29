@@ -45,11 +45,11 @@ const CONFIG = {
 };
 ```
 
-##🧠 Available Tools
-###📅 list_events
+## 🧠 Available Tools
+### 📅 list_events
 Mengambil semua agenda pada tanggal tertentu dari kalender utama & tambahan.
 
-###➕ add_event
+### ➕ add_event
 Menambahkan event baru ke Google Calendar dengan:
 - title
 - startTime
